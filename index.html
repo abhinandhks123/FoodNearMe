@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Nearby Food & Hotels</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f9f9f9;
+    }
+    h1 {
+      color: #ff6347;
+      text-align: center;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+      margin: 20px auto;
+      display: block;
+      background-color: #ff6347;
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+    }
+    #status {
+      text-align: center;
+      margin-bottom: 15px;
+      font-size: 16px;
+      color: #333;
+      white-space: pre-line;
+    }
+    ul {
+      list-style: none;
+      padding: 0;
+    }
+    li {
+      padding: 12px;
+      border-bottom: 1px solid #ddd;
+      background: #fff;
+      margin-bottom: 10px;
+      border-radius: 5px;
+    }
+    li strong {
+      color: #333;
+      font-size: 18px;
+    }
+    .map-link {
+      display: inline-block;
+      margin-top: 5px;
+      color: #0077cc;
+      text-decoration: none;
+      margin-right: 10px;
+    }
+    .map-link:hover {
+      text-decoration: underline;
+    }
+    .filters {
+      margin: 15px auto 30px;
+      max-width: 600px;
+      background: #fff;
+      padding: 15px 20px;
+      border-radius: 5px;
+      box-shadow: 0 0 5px #ccc;
+      text-align: center;
+    }
+    .filters label {
+      margin: 0 10px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .spinner {
+      margin: 20px auto;
+      border: 6px solid #f3f3f3;
+      border-top: 6px solid #ff6347;
+      border-radius: 50%;
+      width: 36px;
+      height: 36px;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg);}
+      100% { transform: rotate(360deg);}
+    }
+  </style>
+</head>
+<body>
+  <h1>🍽️ Nearby Food & Hotels</h1>
+  <button onclick="getLocation()">📍 Detect My Location</button>
+  <p id="status"></p>
+  <div id="spinner" class="spinner" style="display:none;"></div>
+
+  <div id="filters" class="filters" style="display:none;">
+    <strong>Filter by Category:</strong><br/>
+    <label><input type="checkbox" value="restaurant" checked /> Restaurant</label>
+    <label><input type="checkbox" value="fast_food" checked /> Fast Food</label>
+    <label><input type="checkbox" value="food_court" checked /> Food Court</label>
+    <label><input type="checkbox" value="ice_cream" checked /> Ice Cream</label>
+    <label><input type="checkbox" value="bar" checked /> Bar</label>
+    <label><input type="checkbox" value="pub" checked /> Pub</label>
+    <label><input type="checkbox" value="hotel" checked /> Hotel</label>
+  </div>
+
+  <ul id="results"></ul>
+
+  <script>
+    let userCoords = null;
+    let allPlaces = [];
+    
+    // Haversine formula to calculate distance in meters between two lat/lon points
+    function getDistanceFromLatLonInM(lat1, lon1, lat2, lon2) {
+      const R = 6371000; // meters
+      const dLat = deg2rad(lat2 - lat1);
+      const dLon = deg2rad(lon2 - lon1);
+      const a = 
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+        Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    }
+    function deg2rad(deg) {
+      return deg * (Math.PI/180);
+    }
+
+    // Show/hide loading spinner
+    function showSpinner(show) {
+      document.getElementById('spinner').style.display = show ? 'block' : 'none';
+    }
+
+    // Render filtered places list
+    function renderPlaces(filterCategories) {
+      const results = document.getElementById('results');
+      results.innerHTML = '';
+      if (!allPlaces.length) {
+        results.innerHTML = "<li>No places found nearby.</li>";
+        return;
+      }
+
+      const filtered = allPlaces.filter(place => filterCategories.has(place.amenity));
+
+      if (!filtered.length) {
+        results.innerHTML = "<li>No places match the selected categories.</li>";
+        return;
+      }
+
+      filtered.forEach(place => {
+        const tags = place.tags || {};
+        const name = tags.name || "Unnamed Place";
+        const type = place.amenity;
+        const cuisine = tags.cuisine || '';
+        const website = tags.website || tags.contact_website || tags.url || '';
+        const phone = tags.phone || tags.contact_phone || '';
+        const opening_hours = tags.opening_hours || '';
+        const description = tags.description || '';
+        const email = tags.contact_email || tags.email || '';
+        const facebook = tags.contact_facebook || '';
+        const instagram = tags.contact_instagram || '';
+        
+        // Compose address
+        const addrFields = ['addr:housenumber', 'addr:street', 'addr:city', 'addr:postcode', 'addr:state', 'addr:country'];
+        const addressParts = addrFields.map(f => tags[f]).filter(Boolean);
+        const address = addressParts.join(', ');
+
+        // Coordinates fallback
+        let latC = place.lat;
+        let lonC = place.lon;
+        if ((!latC || !lonC) && place.center) {
+          latC = place.center.lat;
+          lonC = place.center.lon;
+        }
+
+        // Calculate distance from user
+        let distanceStr = '';
+        if (userCoords && latC && lonC) {
+          const distM = getDistanceFromLatLonInM(userCoords.lat, userCoords.lon, latC, lonC);
+          if (distM >= 1000) {
+            distanceStr = `Distance: ${(distM / 1000).toFixed(2)} km`;
+          } else {
+            distanceStr = `Distance: ${Math.round(distM)} meters`;
+          }
+        }
+
+        const mapLink = (latC && lonC)
+          ? `<a class="map-link" href="https://www.google.com/maps/search/?api=1&query=${latC},${lonC}" target="_blank" rel="noopener">View on Google Maps</a>`
+          : '';
+
+        const contactLinks = [];
+        if (website) contactLinks.push(`<a class="map-link" href="${website}" target="_blank" rel="noopener">Website</a>`);
+        if (facebook) contactLinks.push(`<a class="map-link" href="${facebook}" target="_blank" rel="noopener">Facebook</a>`);
+        if (instagram) contactLinks.push(`<a class="map-link" href="${instagram}" target="_blank" rel="noopener">Instagram</a>`);
+        if (email) contactLinks.push(`<a class="map-link" href="mailto:${email}">Email</a>`);
+        if (phone) contactLinks.push(`<span>Phone: ${phone}</span>`);
+
+        const li = document.createElement("li");
+        li.innerHTML = `
+          <strong>${name}</strong><br>
+          <em>Type:</em> ${type}${cuisine ? ` — Cuisine: ${cuisine}` : ''}<br>
+          ${address ? `<em>Address:</em> ${address}<br>` : ''}
+          ${opening_hours ? `<em>Hours:</em> ${opening_hours}<br>` : ''}
+          ${distanceStr ? `<em>${distanceStr}</em><br>` : ''}
+          ${contactLinks.join(' | ')}<br>
+          ${description ? `<em>Description:</em> ${description}` : ''}<br>
+          ${mapLink}
+        `;
+        results.appendChild(li);
+      });
+    }
+
+    // Called after fetching places
+    function setupFilters() {
+      const filtersDiv = document.getElementById('filters');
+      filtersDiv.style.display = 'block';
+
+      // When user toggles filters, update list dynamically
+      const checkboxes = filtersDiv.querySelectorAll('input[type=checkbox]');
+      checkboxes.forEach(box => {
+        box.addEventListener('change', () => {
+          const selected = new Set(
+            [...checkboxes].filter(ch => ch.checked).map(ch => ch.value)
+          );
+          renderPlaces(selected);
+        });
+      });
+    }
+
+    function getLocation() {
+      const status = document.getElementById('status');
+      const results = document.getElementById('results');
+      const filtersDiv = document.getElementById('filters');
+
+      results.innerHTML = '';
+      filtersDiv.style.display = 'none';
+      status.textContent = '';
+      userCoords = null;
+      allPlaces = [];
+
+      if (!navigator.geolocation) {
+        status.textContent = "Geolocation is not supported by this browser.";
+        return;
+      }
+
+      status.textContent = 'Getting your location...';
+      showSpinner(true);
+
+      navigator.geolocation.getCurrentPosition(success, error, {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0
+      });
+
+      function success(position) {
+        showSpinner(false);
+        userCoords = {
+          lat: position.coords.latitude,
+          lon: position.coords.longitude
+        };
+        status.textContent = `📍 Your Location: (${userCoords.lat.toFixed(5)}, ${userCoords.lon.toFixed(5)}) — Accuracy: ±${Math.round(position.coords.accuracy)} meters\n🔍 Searching nearby places...`;
+
+        const query = `
+          [out:json][timeout:25];
+          (
+            node["amenity"~"restaurant|fast_food|food_court|ice_cream|bar|pub|hotel"](around:5000,${userCoords.lat},${userCoords.lon});
+            way["amenity"~"restaurant|fast_food|food_court|ice_cream|bar|pub|hotel"](around:5000,${userCoords.lat},${userCoords.lon});
+            relation["amenity"~"restaurant|fast_food|food_court|ice_cream|bar|pub|hotel"](around:5000,${userCoords.lat},${userCoords.lon});
+          );
+          out center tags;
+        `;
+
+        fetch("https://overpass-api.de/api/interpreter", {
+          method: "POST",
+          body: query
+        })
+        .then(res => {
+          if (!res.ok) throw new Error("Network error fetching data");
+          return res.json();
+        })
+        .then(data => {
+          if (!data.elements || !data.elements.length) {
+            status.textContent = "❌ No food or hotel spots found within 5km.";
+            return;
+          }
+          allPlaces = data.elements.map(el => {
+            // unify amenity field to top-level for easier filtering
+            el.amenity = el.tags?.amenity || "unknown";
+            return el;
+          });
+
+          status.textContent = `✅ Found ${allPlaces.length} places nearby. Use filters below to refine results.`;
+          setupFilters();
+
+          // render with all filters checked initially
+          const checkedCategories = new Set(
+            [...document.querySelectorAll('#filters input[type=checkbox]')]
+              .filter(ch => ch.checked)
+              .map(ch => ch.value)
+          );
+          renderPlaces(checkedCategories);
+        })
+        .catch(err => {
+          console.error(err);
+          status.textContent = "❌ Failed to fetch nearby places.";
+          showSpinner(false);
+        });
+      }
+
+      function error(err) {
+        showSpinner(false);
+        status.textContent = "❌ Unable to retrieve your location. Please check permissions or try again.";
+        console.error(err);
+      }
+    }
+  </script>
+</body>
+</html>
+
